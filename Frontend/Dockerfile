@@ -16,7 +16,7 @@ ENV VITE_SOCKET_URL=$VITE_SOCKET_URL
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci
+RUN npm i --legacy-peer-deps
 
 # Copy source and build
 COPY . .
