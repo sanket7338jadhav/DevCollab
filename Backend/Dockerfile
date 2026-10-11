@@ -10,7 +10,7 @@ ENV NODE_ENV=production
 
 # Install dependencies first (leverage Docker layer caching)
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm i --omit=dev
 
 # Copy application source code
 COPY . .
