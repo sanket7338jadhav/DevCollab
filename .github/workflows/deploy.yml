@@ -35,7 +35,7 @@ jobs:
       # --- Backend Checks ---
       - name: Install Backend Dependencies
         working-directory: ./Backend
-        run: npm ci
+        run: npm i
 
       - name: Check Backend Syntax
         working-directory: ./Backend
@@ -44,7 +44,7 @@ jobs:
       # --- Frontend Checks ---
       - name: Install Frontend Dependencies
         working-directory: ./Frontend
-        run: npm ci
+        run: npm i
 
       - name: Build Frontend Production Bundle
         working-directory: ./Frontend
