@@ -1,0 +1,154 @@
+name: DevCollab CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  # ============================================================================
+  # 1. CI JOB: Test & Build Validation
+  # ============================================================================
+  ci:
+    name: Build & Validate (CI)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: |
+            Backend/package-lock.json
+            Frontend/package-lock.json
+
+      # --- Backend Checks ---
+      - name: Install Backend Dependencies
+        working-directory: ./Backend
+        run: npm ci
+
+      - name: Check Backend Syntax
+        working-directory: ./Backend
+        run: node --check server.js
+
+      # --- Frontend Checks ---
+      - name: Install Frontend Dependencies
+        working-directory: ./Frontend
+        run: npm ci
+
+      - name: Build Frontend Production Bundle
+        working-directory: ./Frontend
+        env:
+          VITE_BASE_URL: /api
+          VITE_SOCKET_URL: /
+        run: npm run build
+
+  # ============================================================================
+  # 2. CD JOB: Deploy to Amazon EC2 via SSH
+  # ============================================================================
+  deploy:
+    name: Deploy to Amazon EC2 (CD)
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          timeout: 120s
+          command_timeout: 15m
+          envs: MONGO_URI,JWT_SECRET,JWT_EXPIRES_IN,CLIENT_URL
+          script: |
+            set -e
+
+            APP_DIR="$HOME/DevCollab"
+            BRANCH="${{ github.ref_name }}"
+
+            echo "🚀 Starting deployment on EC2 for branch: $BRANCH"
+
+            # 1. Clone repository if not present, otherwise pull latest
+            if [ ! -d "$APP_DIR" ]; then
+              echo "Repository not found on EC2. Cloning..."
+              git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
+              cd "$APP_DIR"
+            else
+              echo "Repository exists. Pulling latest code..."
+              cd "$APP_DIR"
+              git fetch origin "$BRANCH"
+              git checkout "$BRANCH"
+              git reset --hard origin/"$BRANCH"
+            fi
+
+            # 2. Create / Update .env file from GitHub Secrets if provided
+            echo "Configuring environment variables..."
+            cat <<EOF > .env
+            PORT=5000
+            NODE_ENV=production
+            MONGO_URI=${{ secrets.MONGO_URI }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            JWT_EXPIRES_IN=${{ secrets.JWT_EXPIRES_IN || '7d' }}
+            CLIENT_URL=${{ secrets.CLIENT_URL || format('http://{0}', secrets.EC2_HOST) }}
+            VITE_BASE_URL=/api
+            VITE_SOCKET_URL=/
+            EOF
+
+            # Also provide .env to Backend if needed
+            cp .env Backend/.env
+
+            # 3. Ensure Docker and Docker Compose are available
+            if ! command -v docker &> /dev/null; then
+              echo "Docker is not installed! Running setup script..."
+              chmod +x scripts/setup-ec2.sh
+              ./scripts/setup-ec2.sh
+            fi
+
+            # 4. Build and restart containers using Docker Compose
+            echo "Building and restarting Docker containers..."
+            docker compose down || true
+            docker compose up -d --build --remove-orphans
+
+            # 5. Clean up unused images to preserve EC2 disk space
+            echo "Cleaning dangling Docker images..."
+            docker image prune -f
+
+            # 6. Verify health check
+            echo "Verifying application health..."
+            MAX_RETRIES=15
+            COUNT=0
+            HEALTHY=false
+
+            while [ $COUNT -lt $MAX_RETRIES ]; do
+              if curl -s -f http://localhost:5000/api/health > /dev/null 2>&1 || curl -s -f http://localhost/api/health > /dev/null 2>&1; then
+                HEALTHY=true
+                break
+              fi
+              COUNT=$((COUNT + 1))
+              echo "Waiting for services to spin up... (Attempt $COUNT/$MAX_RETRIES)"
+              sleep 4
+            done
+
+            if [ "$HEALTHY" = true ]; then
+              echo "✅ DevCollab successfully deployed and healthy on EC2!"
+            else
+              echo "❌ Health check timed out! Dumping container logs:"
+              docker compose logs --tail=40
+              exit 1
+            fi
