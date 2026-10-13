@@ -1,163 +1,117 @@
-name: DevCollab CI/CD Pipeline
+services:
+  # ============================================================================
+  # 1. MongoDB Database
+  # ============================================================================
+  mongodb:
+    image: mongo:7
+    container_name: devcollab-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=devcollab
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - devcollab-net
 
-on:
-  push:
-    branches:
-      - main
-      - master
+  # ============================================================================
+  # 2. DevCollab Express API & WebSocket Server
+  # ============================================================================
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    image: devcollab-backend
+    container_name: devcollab-backend
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - MONGO_URI=${MONGO_URI:-mongodb://mongodb:27017/devcollab}
+      - JWT_SECRET=${JWT_SECRET:-devcollab_super_secret_jwt_key_2026}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      - CLIENT_URL=${CLIENT_URL:-http://localhost}
+    networks:
+      - devcollab-net
 
-  pull_request:
-    branches:
-      - main
-      - master
+  # ============================================================================
+  # 3. DevCollab React SPA (Nginx Reverse Proxy)
+  # ============================================================================
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_BASE_URL=${VITE_BASE_URL:-/api}
+        - VITE_SOCKET_URL=${VITE_SOCKET_URL:-/}
+    image: devcollab-frontend
+    container_name: devcollab-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - devcollab-net
 
-  workflow_dispatch:
+  # ============================================================================
+  # 4. Prometheus Monitoring Engine
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: devcollab-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - backend
+    networks:
+      - devcollab-net
 
-jobs:
+  # ============================================================================
+  # 5. Grafana Observability & SRE Dashboards
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: devcollab-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/devcollab-sre.json
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - devcollab-net
 
-  ############################################
-  # CI
-  ############################################
-  ci:
-    name: Build & Validate
-    runs-on: ubuntu-latest
+volumes:
+  mongo_data:
+  prometheus_data:
+  grafana_data:
 
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      ########################################
-      # Backend
-      ########################################
-
-      - name: Install Backend Dependencies
-        working-directory: Backend
-        run: npm install
-
-      - name: Check Backend Syntax
-        working-directory: Backend
-        run: node --check server.js
-
-      ########################################
-      # Frontend
-      ########################################
-
-      - name: Install Frontend Dependencies
-        working-directory: Frontend
-        run: npm install
-
-      - name: Build Frontend
-        working-directory: Frontend
-        env:
-          VITE_BASE_URL: /api
-          VITE_SOCKET_URL: /
-        run: npm run build
-
-  ############################################
-  # CD
-  ############################################
-
-  deploy:
-    name: Deploy to EC2
-    needs: ci
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
-
-        env:
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          JWT_EXPIRES_IN: ${{ secrets.JWT_EXPIRES_IN }}
-          CLIENT_URL: ${{ secrets.CLIENT_URL }}
-          GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
-          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_PORT }}
-          timeout: 120s
-          command_timeout: 15m
-
-          envs: MONGO_URI,JWT_SECRET,JWT_EXPIRES_IN,CLIENT_URL,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD
-
-          script: |
-            set -e
-
-            APP_DIR="$HOME/DevCollab"
-            BRANCH="${{ github.ref_name }}"
-
-            echo "Deploying branch: $BRANCH"
-
-            if [ ! -d "$APP_DIR" ]; then
-              git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
-              cd "$APP_DIR"
-            else
-              cd "$APP_DIR"
-              git fetch origin "$BRANCH"
-              git checkout "$BRANCH"
-              git reset --hard origin/"$BRANCH"
-            fi
-
-            echo "Creating .env"
-
-            cat > .env <<EOF
-            PORT=5000
-            NODE_ENV=production
-            MONGO_URI=$MONGO_URI
-            JWT_SECRET=$JWT_SECRET
-            JWT_EXPIRES_IN=$JWT_EXPIRES_IN
-            CLIENT_URL=$CLIENT_URL
-            VITE_BASE_URL=/api
-            VITE_SOCKET_URL=/
-            GRAFANA_ADMIN_USER=$GRAFANA_ADMIN_USER
-            GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
-            EOF
-
-            cp .env Backend/.env
-
-            if ! command -v docker >/dev/null 2>&1; then
-              echo "Docker not found."
-              chmod +x scripts/setup-ec2.sh
-              ./scripts/setup-ec2.sh
-            fi
-
-            docker compose down || true
-            docker compose up -d --build --remove-orphans
-            docker image prune -f
-
-            echo "Waiting for application..."
-
-            HEALTHY=false
-
-            for i in {1..15}; do
-              if curl -fs http://localhost:5000/api/health >/dev/null || \
-                curl -fs http://localhost/api/health >/dev/null; then
-                HEALTHY=true
-                break
-              fi
-
-              echo "Attempt $i/15"
-              sleep 5
-            done
-
-            if [ "$HEALTHY" = true ]; then
-              echo "Deployment Successful!"
-            else
-              echo "Health check failed."
-              docker compose ps
-              docker compose logs --tail=50
-              exit 1
-            fi
+networks:
+  devcollab-net:
+    driver: bridge
