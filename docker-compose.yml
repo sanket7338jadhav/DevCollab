@@ -14,7 +14,7 @@ services:
     environment:
       - PORT=5000
       - NODE_ENV=production
-      - MONGO_URI=${MONGO_URI:-mongodb://localhost:27017/devcollab}
+      - MONGO_URI=${MONGO_URI:-mongodb://mongodb:27017/devcollab}
       - JWT_SECRET=${JWT_SECRET:-devcollab_super_secret_jwt_key_2026}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
       - CLIENT_URL=${CLIENT_URL:-http://localhost}
@@ -89,9 +89,6 @@ services:
     networks:
       - devcollab-net
 
-networks:
-  devcollab-net:
-    driver: bridge
 
 volumes:
   prometheus_data:
