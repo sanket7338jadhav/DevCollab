@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'DevCollab SRE Dashboards'
+    orgId: 1
+    folder: 'DevCollab'
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

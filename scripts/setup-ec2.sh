@@ -59,11 +59,13 @@ else
 fi
 
 # 5. Configure firewall (UFW)
-echo "Configuring firewall for SSH, HTTP, and HTTPS..."
+echo "Configuring firewall for SSH, HTTP, HTTPS, API, Grafana, and Prometheus..."
 sudo ufw allow 22/tcp || true
 sudo ufw allow 80/tcp || true
 sudo ufw allow 443/tcp || true
 sudo ufw allow 5000/tcp || true
+sudo ufw allow 3000/tcp || true   # Grafana
+sudo ufw allow 9090/tcp || true   # Prometheus
 sudo ufw --force enable || true
 
 echo "=========================================================="

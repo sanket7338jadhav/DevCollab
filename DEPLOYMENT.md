@@ -42,6 +42,8 @@ In the EC2 Security Group, open the following **Inbound rules**:
 | **HTTP** | TCP | `80` | `0.0.0.0/0` | Web application access |
 | **HTTPS** | TCP | `443` | `0.0.0.0/0` | SSL/TLS (if domain configured) |
 | **Custom TCP** | TCP | `5000` | `0.0.0.0/0` | Direct backend API / Health checks |
+| **Custom TCP** | TCP | `3000` | `0.0.0.0/0` (or your IP) | Grafana SRE & Observability Dashboards |
+| **Custom TCP** | TCP | `9090` | `0.0.0.0/0` (or internal) | Prometheus Metrics & Alerting Engine |
 
 ---
 

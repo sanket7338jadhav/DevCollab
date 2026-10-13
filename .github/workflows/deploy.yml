@@ -82,7 +82,7 @@ jobs:
             APP_DIR="$HOME/DevCollab"
             BRANCH="${{ github.ref_name }}"
 
-            echo "🚀 Starting deployment on EC2 for branch: $BRANCH"
+            echo "Starting deployment on EC2 for branch: $BRANCH"
 
             # 1. Clone repository if not present, otherwise pull latest
             if [ ! -d "$APP_DIR" ]; then
@@ -108,6 +108,8 @@ jobs:
             CLIENT_URL=${{ secrets.CLIENT_URL || format('http://{0}', secrets.EC2_HOST) }}
             VITE_BASE_URL=/api
             VITE_SOCKET_URL=/
+            GRAFANA_ADMIN_USER=${{ secrets.GRAFANA_ADMIN_USER || 'admin' }}
+            GRAFANA_ADMIN_PASSWORD=${{ secrets.GRAFANA_ADMIN_PASSWORD || 'admin' }}
             EOF
 
             # Also provide .env to Backend if needed
@@ -146,9 +148,13 @@ jobs:
             done
 
             if [ "$HEALTHY" = true ]; then
-              echo "✅ DevCollab successfully deployed and healthy on EC2!"
+              echo "DevCollab successfully deployed and healthy on EC2!"
             else
-              echo "❌ Health check timed out! Dumping container logs:"
+              echo "Health check timed out! Dumping container logs:"
               docker compose logs --tail=40
               exit 1
             fi
+
+
+
+  

@@ -3,11 +3,17 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const mongoose = require('mongoose');
 const connectDB = require('./config/db');
 const Message = require('./models/Message');
 const { buildConversationId } = require('./controllers/messageController');
 const jwt = require('jsonwebtoken');
 const User = require('./models/User');
+
+// ─── Observability & Metrics ───────────────────────────────────────────────────
+const logger = require('./utils/logger');
+const requestLogger = require('./middleware/requestLogger');
+const { register, metricsMiddleware, metrics } = require('./utils/metrics');
 
 // ─── Connect Database ──────────────────────────────────────────────────────────
 connectDB();
@@ -47,10 +53,13 @@ io.use(async (socket, next) => {
 
 io.on('connection', (socket) => {
   const userId = socket.user._id.toString();
-  console.log(`🟢 Socket connected: ${socket.user.name} (${userId})`);
-
-  // Register user as online
   onlineUsers.set(userId, socket.id);
+  metrics.socketActiveConnections.set(onlineUsers.size);
+
+  logger.info(`🟢 Socket connected: ${socket.user.name} (${userId})`, {
+    userId,
+    activeConnections: onlineUsers.size,
+  });
 
   // Broadcast updated online users to everyone
   io.emit('online_users', Array.from(onlineUsers.keys()));
@@ -74,6 +83,9 @@ io.on('connection', (socket) => {
         .populate('sender', 'name avatar')
         .populate('receiver', 'name avatar');
 
+      // Track metric
+      metrics.socketMessagesTotal.inc();
+
       // Send to receiver if online
       const receiverSocketId = onlineUsers.get(receiverId);
       if (receiverSocketId) {
@@ -83,6 +95,7 @@ io.on('connection', (socket) => {
       // Echo back to sender
       socket.emit('message_sent', populated);
     } catch (err) {
+      logger.error('Failed to send message via socket:', err);
       socket.emit('error', { message: 'Failed to send message' });
     }
   });
@@ -105,12 +118,19 @@ io.on('connection', (socket) => {
   // ── Disconnect ─────────────────────────────────────────────────────────────
   socket.on('disconnect', () => {
     onlineUsers.delete(userId);
+    metrics.socketActiveConnections.set(onlineUsers.size);
     io.emit('online_users', Array.from(onlineUsers.keys()));
-    console.log(`🔴 Socket disconnected: ${socket.user.name}`);
+    logger.info(`🔴 Socket disconnected: ${socket.user.name}`, {
+      userId,
+      activeConnections: onlineUsers.size,
+    });
   });
 });
 
-// ─── Middleware ────────────────────────────────────────────────────────────────
+// ─── Global Observability & HTTP Middlewares ──────────────────────────────────
+app.use(requestLogger);
+app.use(metricsMiddleware);
+
 app.use(
   cors({
     origin: process.env.CLIENT_URL || 'http://localhost:5173',
@@ -120,17 +140,59 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ─── Prometheus Metrics Endpoint ──────────────────────────────────────────────
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } catch (err) {
+    logger.error('Error rendering metrics for scraper:', err);
+    res.status(500).end(err.message);
+  }
+});
+
+// ─── SRE Health & Readiness Probes ────────────────────────────────────────────
+// 1. Comprehensive System Health Overview
+app.get('/api/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  res.json({
+    status: dbStatus === 'connected' ? 'ok' : 'degraded',
+    service: 'devcollab-backend',
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    database: {
+      status: dbStatus,
+      readyState: mongoose.connection.readyState,
+    },
+    memory: {
+      heapUsedMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      heapTotalMB: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+      rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    },
+    activeSockets: onlineUsers.size,
+  });
+});
+
+// 2. Liveness probe (Kubernetes / ECS / Docker container liveness)
+app.get('/api/health/live', (req, res) => {
+  res.status(200).json({ status: 'alive' });
+});
+
+// 3. Readiness probe (Is DB ready to accept queries?)
+app.get('/api/health/ready', (req, res) => {
+  const isReady = mongoose.connection.readyState === 1;
+  if (isReady) {
+    return res.status(200).json({ status: 'ready', database: 'connected' });
+  }
+  return res.status(503).json({ status: 'not_ready', database: 'disconnected' });
+});
+
+// ─── Application API Routes ───────────────────────────────────────────────────
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/projects', require('./routes/projectRoutes'));
 app.use('/api/requests', require('./routes/requestRoutes'));
 app.use('/api/messages', require('./routes/messageRoutes'));
-
-// ─── Health Check ──────────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'DevCollab API is running 🚀' });
-});
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -139,14 +201,19 @@ app.use((req, res) => {
 
 // ─── Global Error Handler ──────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  logger.error('Unhandled Application Error:', {
+    message: err.message,
+    stack: err.stack,
+    requestId: req.requestId,
+  });
   res.status(err.status || 500).json({ message: err.message || 'Internal Server Error' });
 });
 
 // ─── Start Server ──────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`🚀 DevCollab Server running on port ${PORT}`);
-  console.log(`📡 Socket.io enabled`);
-  console.log(`🌐 CORS allowed from: ${process.env.CLIENT_URL}`);
+  logger.info(`🚀 DevCollab Server running on port ${PORT}`);
+  logger.info(`📡 Socket.io enabled`);
+  logger.info(`📊 Prometheus metrics exposed at http://localhost:${PORT}/metrics`);
+  logger.info(`🌐 CORS allowed from: ${process.env.CLIENT_URL}`);
 });

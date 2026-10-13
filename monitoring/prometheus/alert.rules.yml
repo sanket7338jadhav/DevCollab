@@ -1,0 +1,80 @@
+groups:
+  - name: devcollab-sre-alerts
+    rules:
+      # ========================================================================
+      # SRE GOLDEN SIGNAL: AVAILABILITY & SERVICE UPTIME
+      # ========================================================================
+      - alert: DevCollabBackendDown
+        expr: up{job="devcollab-backend"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          tier: backend
+        annotations:
+          summary: "DevCollab Backend instance is unreachable"
+          description: "Service {{ $labels.instance }} has been down for more than 30 seconds."
+          runbook_url: "https://github.com/sanket7338jadhav/DevCollab/blob/master/SRE_OBSERVABILITY.md#incident-runbook"
+
+      - alert: MongoDBConnectionLost
+        expr: devcollab_database_connected == 0
+        for: 30s
+        labels:
+          severity: critical
+          tier: database
+        annotations:
+          summary: "MongoDB Database Connection Lost"
+          description: "Backend has lost connectivity to MongoDB for over 30s."
+          runbook_url: "https://github.com/sanket7338jadhav/DevCollab/blob/master/SRE_OBSERVABILITY.md#incident-runbook"
+
+      # ========================================================================
+      # SRE GOLDEN SIGNAL: ERROR RATE
+      # ========================================================================
+      - alert: HighHttpErrorRate5xx
+        expr: (sum(rate(devcollab_http_requests_total{status_code=~"5.."}[2m])) or vector(0)) / (sum(rate(devcollab_http_requests_total[2m])) > 0) * 100 > 1
+        for: 1m
+        labels:
+          severity: critical
+          tier: backend
+        annotations:
+          summary: "High HTTP 5xx Error Rate (>1%)"
+          description: "Current 5xx error rate is {{ $value | printf \"%.2f\" }}%, violating the 99.5% availability SLO."
+          runbook_url: "https://github.com/sanket7338jadhav/DevCollab/blob/master/SRE_OBSERVABILITY.md#incident-runbook"
+
+      # ========================================================================
+      # SRE GOLDEN SIGNAL: LATENCY
+      # ========================================================================
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(devcollab_http_request_duration_seconds_bucket[2m])) by (le)) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          tier: backend
+        annotations:
+          summary: "High P95 Latency (>500ms)"
+          description: "95th percentile request latency is {{ $value | printf \"%.3f\" }}s over the last 2 minutes."
+          runbook_url: "https://github.com/sanket7338jadhav/DevCollab/blob/master/SRE_OBSERVABILITY.md#incident-runbook"
+
+      # ========================================================================
+      # SRE GOLDEN SIGNAL: SATURATION
+      # ========================================================================
+      - alert: HighMemorySaturation
+        expr: (devcollab_nodejs_heap_size_used_bytes / devcollab_nodejs_heap_size_total_bytes) * 100 > 85
+        for: 2m
+        labels:
+          severity: warning
+          tier: infrastructure
+        annotations:
+          summary: "Node.js Heap Memory Saturation (>85%)"
+          description: "Heap memory usage is at {{ $value | printf \"%.1f\" }}% of total allocated heap."
+          runbook_url: "https://github.com/sanket7338jadhav/DevCollab/blob/master/SRE_OBSERVABILITY.md#incident-runbook"
+
+      - alert: HighEventLoopLag
+        expr: devcollab_nodejs_eventloop_lag_seconds > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          tier: runtime
+        annotations:
+          summary: "High Node.js Event Loop Lag (>100ms)"
+          description: "Event loop lag is {{ $value | printf \"%.3f\" }}s, indicating CPU blocking tasks."
+          runbook_url: "https://github.com/sanket7338jadhav/DevCollab/blob/master/SRE_OBSERVABILITY.md#incident-runbook"
