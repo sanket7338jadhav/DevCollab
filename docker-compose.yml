@@ -79,12 +79,12 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
 
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_PORT }}
-          timeout: 120s
-          command_timeout: 15m
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: ${{ secrets.EC2_PORT }}
+
+        envs: MONGO_URI,JWT_SECRET,JWT_EXPIRES_IN,CLIENT_URL,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD
 
           script: |
             set -e
@@ -109,14 +109,14 @@ jobs:
             cat > .env <<EOF
             PORT=5000
             NODE_ENV=production
-            MONGO_URI=${{ secrets.MONGO_URI }}
-            JWT_SECRET=${{ secrets.JWT_SECRET }}
-            JWT_EXPIRES_IN=${{ secrets.JWT_EXPIRES_IN }}
-            CLIENT_URL=${{ secrets.CLIENT_URL }}
+            MONGO_URI=$MONGO_URI
+            JWT_SECRET=$JWT_SECRET
+            JWT_EXPIRES_IN=$JWT_EXPIRES_IN
+            CLIENT_URL=$CLIENT_URL
             VITE_BASE_URL=/api
             VITE_SOCKET_URL=/
-            GRAFANA_ADMIN_USER=${{ secrets.GRAFANA_ADMIN_USER }}
-            GRAFANA_ADMIN_PASSWORD=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+            GRAFANA_ADMIN_USER=$GRAFANA_ADMIN_USER
+            GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
             EOF
 
             cp .env Backend/.env
